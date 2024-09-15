@@ -1,0 +1,5 @@
+{
+    "COM": "COM11",
+    "baudrate": "115200",
+    "listen_port": "10500"
+}
