@@ -1,138 +1,52 @@
-#define SPK (10)
-#define COOLDOWN_ITERATIONS (2000)
-#define TRIG_MAX (1000)
+#include "MotionSensor.h"
+#include "SecuritySystem.h"
 
-#define SIREN_LOW (440)
-#define SIREN_HIGH (1000)
+#define SENSOR_PIN A0  // Pin where the motion sensor is connected
 
-// Define the size of the window for the moving average
-const int windowSize = 20;
-float values[windowSize];   // Array to store the last N measured values
-int currentIndex = 0;       // Current position in the array
-float sum = 0;              // Sum of the current values in the window
-int count = 0;              // Number of valid values (for the first N measurements)
-float previousDistance = 0;
+// Create an instance of the MotionSensor for detecting movement
+MotionSensor motionSensor(SENSOR_PIN);
 
-bool cooldownPassed = false;
-int iterCount = 0;
-int trig = 0;
-bool lastTrig = false;
+// We can easily add more sensors here in the future. Right now, just one.
+Sensor* sensorArray[] = { &motionSensor };
 
-// Siren
-int currF = SIREN_LOW;
-bool risePitch = true;
-bool systemEnabled = false;  // Variable to track system state
+// Create the SecuritySystem instance, pass the array of sensors (currently just one)
+SecuritySystem securitySystem(sensorArray, 1);
 
-void iterSiren() {
-  if ((currF >= SIREN_HIGH && risePitch) || (currF <= SIREN_LOW && !risePitch)) {
-    risePitch = !risePitch;
-  }
-  currF = currF + (risePitch ? 5 : -5);
-  Serial.println(currF);
-  tone(SPK, currF);
-}
-
-void resetSiren() {
-  currF = SIREN_LOW;
-  risePitch = true;
-}
-
-// Function to calculate the moving average
-float calculateMovingAverage(float newValue) {
-  if (count == windowSize) {
-    sum -= values[currentIndex];
-  } else {
-    count++;
-  }
-  sum += newValue;
-  values[currentIndex] = newValue;
-  currentIndex = (currentIndex + 1) % windowSize;
-  return sum / count;
-}
-
-// Threshold for detecting significant changes in distance (in cm)
-const float movementThreshold = 15.0;
-
-// Function to detect significant movement
-bool detectMovement(float currentDistance, float previousDistance) {
-  float deltaDistance = abs(currentDistance - previousDistance);
-  return (deltaDistance > movementThreshold);
-}
-
-// Function to read command from serial
+// Function to read commands from serial input
 String getCommand() {
   String command = "";
+  
+  // While there’s data in the serial buffer, read it
   while (Serial.available() > 0) {
-    char c = Serial.read();
-    command += c;
-    delay(10);  // To allow full command reception
+    char c = Serial.read();  // Read one character at a time
+    command += c;  // Build the full command string
+    delay(10);  // Short delay to give time for the rest of the command to come in
   }
-  return command;
+  return command;  // Return the assembled command
 }
 
-// Serialize sensor data
-void sendSensorData() {
-  String state = (trig > 0) ? "open" : "closed";
-  String sensorData = "{'sensor_type': '0', 'sensor_name': 'salon', 'state':'" + state + "'}";
-  Serial.println(sensorData);  // Send serialized data to serial
-}
-
-// Main logic state
-enum MACHINE_STATE {
-  STATE_SAFE,
-  STATE_ARMING,
-  STATE_ARMED,
-  STATE_ALARM,
-} typedef MACHINE_STATE;
-
-MACHINE_STATE state = STATE_SAFE;
 
 void setup() {
-  pinMode(A0, INPUT);
   Serial.begin(115200);
+  // Set up done, nothing fancy needed here for now
 }
 
 void loop() {
-  // Check for command from serial
+  // Get any input command from the serial connection
   String command = getCommand();
+
+  // Check if we received the special command to activate the system
   if (command == "\x00\x00\x00\x01") {
-    systemEnabled = true;  // Enable the system when the magic string is received
-  } else if (command == "\x00\x00\x00\x02") {
-    sendSensorData();  // Send serialized data when the other magic string is received
+    // System is "armed" now, check if any sensors are triggered
+    securitySystem.checkSensors();
+  } 
+  // Check if we got the command to send sensor data
+  else if (command == "\x00\x00\x00\x02") {
+    // This command sends the sensor's current data (useful for debugging)
+    Serial.println(sensorArray[0]->getSensorData());
   }
 
-  if (systemEnabled) {
-    int rawVal = analogRead(A0);
-    float procVal = calculateMovingAverage(rawVal);
-    float currentDistance = rawVal;  // Get the new distance reading
-
-    if (cooldownPassed) {
-      // Detect if there has been significant movement
-      if (detectMovement(currentDistance, previousDistance)) {
-        trig = TRIG_MAX;
-      }
-
-      if (trig) {
-        if (!lastTrig) {
-          // Rise trigger
-        }
-        iterSiren();
-        --trig;
-      } else {
-        if (lastTrig || trig <= 0) {
-          // Fall trigger
-          noTone(SPK);
-          resetSiren();
-        }
-      }
-      lastTrig = (trig > 0);
-    } else {
-      if (iterCount++ >= COOLDOWN_ITERATIONS) {
-        cooldownPassed = true;
-        Serial.println("Armed!");
-      }
-    }
-    previousDistance = currentDistance;
-  }
-  delay(1);
+  // A small delay so we don't overwhelm the system with constant checks
+  delay(100);
 }
+
