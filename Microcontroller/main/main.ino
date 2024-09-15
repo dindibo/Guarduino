@@ -21,42 +21,32 @@ bool lastTrig = false;
 // Siren
 int currF = SIREN_LOW;
 bool risePitch = true;
+bool systemEnabled = false;  // Variable to track system state
 
-void iterSiren(){
-  if((currF >= SIREN_HIGH && risePitch) || (currF <= SIREN_LOW && !risePitch)){
+void iterSiren() {
+  if ((currF >= SIREN_HIGH && risePitch) || (currF <= SIREN_LOW && !risePitch)) {
     risePitch = !risePitch;
   }
-
   currF = currF + (risePitch ? 5 : -5);
-  
   Serial.println(currF);
   tone(SPK, currF);
 }
 
-void resetSiren(){
+void resetSiren() {
   currF = SIREN_LOW;
   risePitch = true;
 }
 
 // Function to calculate the moving average
 float calculateMovingAverage(float newValue) {
-  // If the array is full, subtract the oldest value from the sum
   if (count == windowSize) {
     sum -= values[currentIndex];
   } else {
     count++;
   }
-
-  // Add the new value to the sum
   sum += newValue;
-
-  // Store the new value in the array2
   values[currentIndex] = newValue;
-
-  // Update the current index, wrapping around if necessary
   currentIndex = (currentIndex + 1) % windowSize;
-
-  // Return the moving average
   return sum / count;
 }
 
@@ -65,18 +55,29 @@ const float movementThreshold = 15.0;
 
 // Function to detect significant movement
 bool detectMovement(float currentDistance, float previousDistance) {
-  // Calculate the absolute difference between the current and previous distances
   float deltaDistance = abs(currentDistance - previousDistance);
-
-  // If the change exceeds the threshold, return true to indicate movement
-  if (deltaDistance > movementThreshold) {
-    return true;
-  } else {
-    return false;
-  }
+  return (deltaDistance > movementThreshold);
 }
 
-// TODO: Use
+// Function to read command from serial
+String getCommand() {
+  String command = "";
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    command += c;
+    delay(10);  // To allow full command reception
+  }
+  return command;
+}
+
+// Serialize sensor data
+void sendSensorData() {
+  String state = (trig > 0) ? "open" : "closed";
+  String sensorData = "{'sensor_type': '0', 'sensor_name': 'salon', 'state':'" + state + "'}";
+  Serial.println(sensorData);  // Send serialized data to serial
+}
+
+// Main logic state
 enum MACHINE_STATE {
   STATE_SAFE,
   STATE_ARMING,
@@ -92,52 +93,46 @@ void setup() {
 }
 
 void loop() {
-  int rawVal = analogRead(A0);
-  float procVal  = calculateMovingAverage(rawVal);
-
-
-  float currentDistance = rawVal;  // Get the new distance reading
-
-  if (cooldownPassed) {
-    // Detect if there has been significant movement
-    if (detectMovement(currentDistance, previousDistance)) {
-      trig = TRIG_MAX;
-    }
-
-    if(trig){ 
-
-      if(!lastTrig){
-        // Rise trigger
-        
-      }
-
-      iterSiren();
-      
-      --trig;  
-    }
-    else{     
-      
-      if(lastTrig || trig <= 0){
-        // Fall trigger
-        noTone(SPK);
-        resetSiren();
-        
-      }
-    }
-
-    lastTrig = (trig > 0);
-
-  }
-  else {
-    if (iterCount++ >= COOLDOWN_ITERATIONS) {
-      cooldownPassed = true;
-      Serial.println("Armed!");
-    }
+  // Check for command from serial
+  String command = getCommand();
+  if (command == "\x00\x00\x00\x01") {
+    systemEnabled = true;  // Enable the system when the magic string is received
+  } else if (command == "\x00\x00\x00\x02") {
+    sendSensorData();  // Send serialized data when the other magic string is received
   }
 
+  if (systemEnabled) {
+    int rawVal = analogRead(A0);
+    float procVal = calculateMovingAverage(rawVal);
+    float currentDistance = rawVal;  // Get the new distance reading
 
-  // Update previous distance for the next iteration
-  previousDistance = currentDistance;
+    if (cooldownPassed) {
+      // Detect if there has been significant movement
+      if (detectMovement(currentDistance, previousDistance)) {
+        trig = TRIG_MAX;
+      }
 
+      if (trig) {
+        if (!lastTrig) {
+          // Rise trigger
+        }
+        iterSiren();
+        --trig;
+      } else {
+        if (lastTrig || trig <= 0) {
+          // Fall trigger
+          noTone(SPK);
+          resetSiren();
+        }
+      }
+      lastTrig = (trig > 0);
+    } else {
+      if (iterCount++ >= COOLDOWN_ITERATIONS) {
+        cooldownPassed = true;
+        Serial.println("Armed!");
+      }
+    }
+    previousDistance = currentDistance;
+  }
   delay(1);
 }
